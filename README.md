@@ -11,3 +11,7 @@ bundle:list | grep -i packethandler
 bundle:list | grep -i arphandler-impl
 bundle:stop <BUNDLE_IDs>
 ```
+
+```
+sudo snap install intellij-idea --classic
+```
