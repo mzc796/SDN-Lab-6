@@ -96,10 +96,10 @@ public class PacketDispatcher {
 
         List<NodeConnectorRef> nodeConnectors = inventoryReader.getSwitchNodeConnectors().get(nodeId);
 
-        if (nodeConnectors == null) {
+        if (nodeConnectors == null || nodeConnectors.isEmpty()) {
             refreshInventoryReader();
             nodeConnectors = inventoryReader.getSwitchNodeConnectors().get(nodeId);
-            if (nodeConnectors == null) {
+            if (nodeConnectors == null || nodeConnectors.isEmpty()) {
                 LOG.info("Cannot flood packets, as inventory doesn't have any node connectors for node {}", nodeId);
                 return;
             }

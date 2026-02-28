@@ -51,6 +51,7 @@ public class ArpHandlerProvider {
 
         // Setup InventoryReader
         InventoryReader inventoryReader = new InventoryReader(dataBroker);
+        inventoryReader.setRefreshData(true);
 
         // Setup PacketDispatcher
         PacketDispatcher packetDispatcher = new PacketDispatcher(inventoryReader,
