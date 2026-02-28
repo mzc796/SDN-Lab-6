@@ -8,8 +8,9 @@
         <relativePath>../../binding-parent/pom.xml</relativePath>
     </parent>
 
-    <artifactId>loopremover-impl</artifactId>
+    <artifactId>shortestpath-impl</artifactId>
     <packaging>bundle</packaging>
+    <name>OpenDaylight :: L2Switch :: ShortestPath :: Impl</name>
 
     <dependencies>
         <dependency>
@@ -35,8 +36,11 @@
         </dependency>
         <dependency>
             <groupId>org.opendaylight.l2switch</groupId>
-            <artifactId>loopremover-model</artifactId>
-            <scope>test</scope>
+            <artifactId>addresstracker-model</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.opendaylight.l2switch</groupId>
+            <artifactId>packethandler-model</artifactId>
         </dependency>
         <dependency>
             <groupId>org.opendaylight.mdsal</groupId>
@@ -78,12 +82,6 @@
             <groupId>org.opendaylight.yangtools</groupId>
             <artifactId>yang-common</artifactId>
         </dependency>
-
-        <dependency>
-            <groupId>org.opendaylight.yangtools</groupId>
-            <artifactId>util</artifactId>
-            <scope>test</scope>
-        </dependency>
     </dependencies>
 
     <build>
@@ -94,28 +92,6 @@
                 <extensions>true</extensions>
                 <configuration>
                     <instructions>
-                        <!-- FIXME: Ugh, why? -->
-                        <Export-Package>
-                            org.apache.commons*,
-                            edu.uci.ics.jung.algorithms.blockmodel,
-                            edu.uci.ics.jung.algorithms.cluster,
-                            edu.uci.ics.jung.algorithms.filters,
-                            edu.uci.ics.jung.algorithms.flows,
-                            edu.uci.ics.jung.algorithms.generators,
-                            edu.uci.ics.jung.algorithms.generators.random,
-                            edu.uci.ics.jung.algorithms.layout,
-                            edu.uci.ics.jung.algorithms.layout.util,
-                            edu.uci.ics.jung.algorithms.metrics,
-                            edu.uci.ics.jung.algorithms.scoring,
-                            edu.uci.ics.jung.algorithms.scoring.util,
-                            edu.uci.ics.jung.algorithms.shortestpath,
-                            edu.uci.ics.jung.algorithms.transformation,
-                            edu.uci.ics.jung.algorithms.util,
-                            edu.uci.ics.jung.graph;-split-package:=merge-first,
-                            edu.uci.ics.jung.graph.event,
-                            edu.uci.ics.jung.graph.util;-split-package:=merge-first,
-                            org.opendaylight.yang.gen.v1.urn.opendaylight.packet.loop.remover.impl.rev140528
-                        </Export-Package>
                         <Import-Package>*</Import-Package>
                     </instructions>
                 </configuration>

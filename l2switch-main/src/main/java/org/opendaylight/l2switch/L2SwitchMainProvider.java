@@ -7,16 +7,12 @@
  */
 package org.opendaylight.l2switch;
 
-import org.opendaylight.l2switch.flow.FlowWriterServiceImpl;
 import org.opendaylight.l2switch.flow.InitialFlowWriter;
-import org.opendaylight.l2switch.flow.ReactiveFlowWriter;
-import org.opendaylight.l2switch.inventory.InventoryReader;
 import org.opendaylight.mdsal.binding.api.DataBroker;
 import org.opendaylight.mdsal.binding.api.NotificationService;
 import org.opendaylight.mdsal.binding.api.RpcService;
 import org.opendaylight.yang.gen.v1.urn.opendaylight.flow.service.rev130819.AddFlow;
 import org.opendaylight.yang.gen.v1.urn.opendaylight.l2switch.l2switch.config.rev140528.L2switchConfig;
-import org.opendaylight.yang.gen.v1.urn.opendaylight.packet.arp.rev140528.ArpPacketReceived;
 import org.opendaylight.yangtools.concepts.Registration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -24,7 +20,6 @@ import org.slf4j.LoggerFactory;
 public class L2SwitchMainProvider {
     private static final Logger LOG = LoggerFactory.getLogger(L2SwitchMainProvider.class);
     private Registration topoNodeListherReg;
-    private Registration reactFlowWriterReg;
 
     private final DataBroker dataService;
     private final NotificationService notificationService;
@@ -41,19 +36,9 @@ public class L2SwitchMainProvider {
     }
 
     public void init() {
-        // Setup FlowWrtierService
-        FlowWriterServiceImpl flowWriterService = new FlowWriterServiceImpl(rpcService.getRpc(AddFlow.class));
-        flowWriterService.setFlowTableId(mainConfig.getReactiveFlowTableId());
-        flowWriterService.setFlowPriority(mainConfig.getReactiveFlowPriority());
-        flowWriterService.setFlowIdleTimeout(mainConfig.getReactiveFlowIdleTimeout());
-        flowWriterService.setFlowHardTimeout(mainConfig.getReactiveFlowHardTimeout());
-
-        // Setup InventoryReader
-        InventoryReader inventoryReader = new InventoryReader(dataService);
-
         // Write initial flows
         if (mainConfig.getIsInstallDropallFlow()) {
-            LOG.info("L2Switch will install a dropall flow on each switch");
+            LOG.info("L2Switch will install a table-miss flow on each switch");
             InitialFlowWriter initialFlowWriter = new InitialFlowWriter(rpcService.getRpc(AddFlow.class));
             initialFlowWriter.setFlowTableId(mainConfig.getDropallFlowTableId());
             initialFlowWriter.setFlowPriority(mainConfig.getDropallFlowPriority());
@@ -62,26 +47,12 @@ public class L2SwitchMainProvider {
             topoNodeListherReg = initialFlowWriter.registerAsDataChangeListener(dataService);
         }
         else {
-            LOG.info("Dropall flows will not be installed");
-        }
-
-        if (mainConfig.getIsLearningOnlyMode()) {
-            LOG.info("L2Switch is in Learning Only Mode");
-        }
-        else {
-            // Setup reactive flow writer
-            LOG.info("L2Switch will react to network traffic and install flows");
-            ReactiveFlowWriter reactiveFlowWriter = new ReactiveFlowWriter(inventoryReader, flowWriterService);
-            reactFlowWriterReg = notificationService.registerListener(ArpPacketReceived.class, reactiveFlowWriter);
+            LOG.info("Table-miss flows will not be installed");
         }
         LOG.info("L2SwitchMain initialized.");
     }
 
     public void close() {
-        if (reactFlowWriterReg != null) {
-            reactFlowWriterReg.close();
-        }
-
         if (topoNodeListherReg != null) {
             topoNodeListherReg.close();
         }

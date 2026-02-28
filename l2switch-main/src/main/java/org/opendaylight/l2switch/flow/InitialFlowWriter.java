@@ -22,7 +22,8 @@ import org.opendaylight.mdsal.binding.api.DataTreeModification;
 import org.opendaylight.mdsal.common.api.LogicalDatastoreType;
 import org.opendaylight.openflowplugin.api.OFConstants;
 import org.opendaylight.yang.gen.v1.urn.ietf.params.xml.ns.yang.ietf.inet.types.rev130715.Uri;
-import org.opendaylight.yang.gen.v1.urn.opendaylight.action.types.rev131112.action.action.DropActionCaseBuilder;
+import org.opendaylight.yang.gen.v1.urn.opendaylight.action.types.rev131112.action.action.OutputActionCaseBuilder;
+import org.opendaylight.yang.gen.v1.urn.opendaylight.action.types.rev131112.action.action.output.action._case.OutputActionBuilder;
 import org.opendaylight.yang.gen.v1.urn.opendaylight.action.types.rev131112.action.list.ActionBuilder;
 import org.opendaylight.yang.gen.v1.urn.opendaylight.flow.inventory.rev130819.FlowCapableNode;
 import org.opendaylight.yang.gen.v1.urn.opendaylight.flow.inventory.rev130819.FlowId;
@@ -38,6 +39,7 @@ import org.opendaylight.yang.gen.v1.urn.opendaylight.flow.service.rev130819.Flow
 import org.opendaylight.yang.gen.v1.urn.opendaylight.flow.types.rev131026.FlowCookie;
 import org.opendaylight.yang.gen.v1.urn.opendaylight.flow.types.rev131026.FlowModFlags;
 import org.opendaylight.yang.gen.v1.urn.opendaylight.flow.types.rev131026.FlowRef;
+import org.opendaylight.yang.gen.v1.urn.opendaylight.flow.types.rev131026.OutputPortValues;
 import org.opendaylight.yang.gen.v1.urn.opendaylight.flow.types.rev131026.flow.InstructionsBuilder;
 import org.opendaylight.yang.gen.v1.urn.opendaylight.flow.types.rev131026.flow.MatchBuilder;
 import org.opendaylight.yang.gen.v1.urn.opendaylight.flow.types.rev131026.instruction.instruction.ApplyActionsCaseBuilder;
@@ -145,7 +147,7 @@ public class InitialFlowWriter implements DataTreeChangeListener<Node> {
         }
 
         /**
-         * Adds a flow, which drops all packets, on the specifide node.
+         * Adds a table-miss flow, which sends all unmatched packets to the controller, on the specified node.
          * @param nodeId The node to install the flow on.
          */
         public void addInitialFlows(final InstanceIdentifier<Node> nodeId) {
@@ -154,8 +156,8 @@ public class InitialFlowWriter implements DataTreeChangeListener<Node> {
             final var tableId = getTableInstanceId(nodeId);
             final var flowId = getFlowInstanceId(tableId);
 
-            // add drop all flow
-            writeFlowToController(nodeId, tableId, flowId, createDropAllFlow(flowTableId, flowPriority));
+            // add table-miss flow
+            writeFlowToController(nodeId, tableId, flowId, createTableMissFlow(flowTableId, flowPriority));
 
             LOG.debug("Added initial flows for node {} ", nodeId);
         }
@@ -174,16 +176,16 @@ public class InitialFlowWriter implements DataTreeChangeListener<Node> {
                 new FlowKey(new FlowId(FLOW_ID_PREFIX + String.valueOf(flowIdInc.getAndIncrement()))));
         }
 
-        private Flow createDropAllFlow(final Uint8 tableId, final Uint16 priority) {
+        private Flow createTableMissFlow(final Uint8 tableId, final Uint16 priority) {
 
             // start building flow
-            final var dropAll = new FlowBuilder()
+            final var tableMiss = new FlowBuilder()
                 .setTableId(tableId)
-                .setFlowName("dropall");
+                .setFlowName("table-miss");
 
-            return dropAll
+            return tableMiss
                 // use its own hash code for id.
-                .setId(new FlowId(Long.toString(dropAll.hashCode())))
+                .setId(new FlowId(Long.toString(tableMiss.hashCode())))
                 .setMatch(new MatchBuilder().build())
                 // Put our Instruction in a list of Instructions
                 .setInstructions(new InstructionsBuilder()
@@ -194,7 +196,12 @@ public class InitialFlowWriter implements DataTreeChangeListener<Node> {
                             // Create an Apply Action
                             .setApplyActions(new ApplyActionsBuilder().setAction(BindingMap.of(new ActionBuilder()
                                 .setOrder(0)
-                                .setAction(new DropActionCaseBuilder().build())
+                                .setAction(new OutputActionCaseBuilder()
+                                    .setOutputAction(new OutputActionBuilder()
+                                        .setOutputNodeConnector(new Uri(OutputPortValues.CONTROLLER.toString()))
+                                        .setMaxLength(Uint16.MAX_VALUE)
+                                        .build())
+                                    .build())
                                 .build()))
                                 .build())
                             .build())

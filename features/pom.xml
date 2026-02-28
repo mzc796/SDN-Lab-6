@@ -36,5 +36,6 @@
         <module>odl-l2switch-switch</module>
         <module>odl-l2switch-switch-rest</module>
         <module>odl-l2switch-switch-ui</module>
+        <module>odl-l2switch-shortestpath</module>
     </modules>
 </project>

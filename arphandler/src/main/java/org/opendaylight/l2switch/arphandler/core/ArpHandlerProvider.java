@@ -15,7 +15,6 @@ import org.opendaylight.mdsal.binding.api.RpcService;
 import org.opendaylight.yang.gen.v1.urn.opendaylight.flow.service.rev130819.AddFlow;
 import org.opendaylight.yang.gen.v1.urn.opendaylight.packet.arp.handler.config.rev140528.ArpHandlerConfig;
 import org.opendaylight.yang.gen.v1.urn.opendaylight.packet.arp.rev140528.ArpPacketReceived;
-import org.opendaylight.yang.gen.v1.urn.opendaylight.packet.ethernet.rev140528.EthernetPacketReceived;
 import org.opendaylight.yang.gen.v1.urn.opendaylight.packet.service.rev130709.TransmitPacket;
 import org.opendaylight.yangtools.concepts.Registration;
 import org.slf4j.Logger;
@@ -24,8 +23,6 @@ import org.slf4j.LoggerFactory;
 public class ArpHandlerProvider {
     private static final Logger LOG = LoggerFactory.getLogger(ArpHandlerProvider.class);
     private Registration listenerRegistration;
-    private Registration floodTopoListenerReg;
-    private Registration floodInvListenerReg;
     private Registration topoNodeListenerReg;
 
     private final NotificationService notificationService;
@@ -42,54 +39,34 @@ public class ArpHandlerProvider {
     }
 
     public void init() {
-        if (arpHandlerConfig.getIsProactiveFloodMode()) {
-            //Setup proactive flow writer, which writes flood flows
-            LOG.info("ArpHandler is in Proactive Flood Mode");
-            ProactiveFloodFlowWriter floodFlowWriter = new ProactiveFloodFlowWriter(dataBroker,
-                    rpcService.getRpc(AddFlow.class));
-            floodFlowWriter.setFlowTableId(arpHandlerConfig.getFloodFlowTableId());
-            floodFlowWriter.setFlowPriority(arpHandlerConfig.getFloodFlowPriority());
-            floodFlowWriter.setFlowIdleTimeout(arpHandlerConfig.getFloodFlowIdleTimeout());
-            floodFlowWriter.setFlowHardTimeout(arpHandlerConfig.getFloodFlowHardTimeout());
-            floodFlowWriter.setFlowInstallationDelay(arpHandlerConfig.getFloodFlowInstallationDelay().toJava());
-            floodTopoListenerReg = floodFlowWriter.registerAsDataChangeListener();
-            floodInvListenerReg = notificationService.registerListener(EthernetPacketReceived.class, floodFlowWriter);
-        } else {
-            //Write initial flows to send arp to controller
-            LOG.info("ArpHandler is in Reactive Mode");
-            InitialFlowWriter initialFlowWriter = new InitialFlowWriter(rpcService.getRpc(AddFlow.class));
-            initialFlowWriter.setFlowTableId(arpHandlerConfig.getArpFlowTableId());
-            initialFlowWriter.setFlowPriority(arpHandlerConfig.getArpFlowPriority());
-            initialFlowWriter.setFlowIdleTimeout(arpHandlerConfig.getArpFlowIdleTimeout());
-            initialFlowWriter.setFlowHardTimeout(arpHandlerConfig.getArpFlowHardTimeout());
-            initialFlowWriter.setIsHybridMode(arpHandlerConfig.getIsHybridMode());
-            topoNodeListenerReg = initialFlowWriter.registerAsDataChangeListener(dataBroker);
+        //Write initial flows to send arp to controller
+        LOG.info("ArpHandler is in Reactive Mode");
+        InitialFlowWriter initialFlowWriter = new InitialFlowWriter(rpcService.getRpc(AddFlow.class));
+        initialFlowWriter.setFlowTableId(arpHandlerConfig.getArpFlowTableId());
+        initialFlowWriter.setFlowPriority(arpHandlerConfig.getArpFlowPriority());
+        initialFlowWriter.setFlowIdleTimeout(arpHandlerConfig.getArpFlowIdleTimeout());
+        initialFlowWriter.setFlowHardTimeout(arpHandlerConfig.getArpFlowHardTimeout());
+        initialFlowWriter.setIsHybridMode(arpHandlerConfig.getIsHybridMode());
+        topoNodeListenerReg = initialFlowWriter.registerAsDataChangeListener(dataBroker);
 
-            // Setup InventoryReader
-            InventoryReader inventoryReader = new InventoryReader(dataBroker);
+        // Setup InventoryReader
+        InventoryReader inventoryReader = new InventoryReader(dataBroker);
 
-            // Setup PacketDispatcher
-            PacketDispatcher packetDispatcher = new PacketDispatcher(inventoryReader,
-                rpcService.getRpc(TransmitPacket.class));
+        // Setup PacketDispatcher
+        PacketDispatcher packetDispatcher = new PacketDispatcher(inventoryReader,
+            rpcService.getRpc(TransmitPacket.class));
 
-            // Setup ArpPacketHandler
-            ArpPacketHandler arpPacketHandler = new ArpPacketHandler(packetDispatcher);
+        // Setup ArpPacketHandler
+        ArpPacketHandler arpPacketHandler = new ArpPacketHandler(packetDispatcher);
 
-            // Register ArpPacketHandler
-            this.listenerRegistration = notificationService.registerListener(ArpPacketReceived.class, arpPacketHandler);
-        }
+        // Register ArpPacketHandler
+        this.listenerRegistration = notificationService.registerListener(ArpPacketReceived.class, arpPacketHandler);
         LOG.info("ArpHandler initialized.");
     }
 
     public void close() throws Exception {
         if (listenerRegistration != null) {
             listenerRegistration.close();
-        }
-        if (floodTopoListenerReg != null) {
-            floodTopoListenerReg.close();
-        }
-        if (floodInvListenerReg != null) {
-            floodInvListenerReg.close();
         }
         if (topoNodeListenerReg != null) {
             topoNodeListenerReg.close();

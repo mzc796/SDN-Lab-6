@@ -11,9 +11,6 @@ import static java.util.Objects.requireNonNull;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.util.concurrent.FluentFuture;
-import com.google.common.util.concurrent.FutureCallback;
-import com.google.common.util.concurrent.Futures;
-import com.google.common.util.concurrent.MoreExecutors;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -27,20 +24,14 @@ import org.opendaylight.mdsal.binding.api.DataObjectModification;
 import org.opendaylight.mdsal.binding.api.DataTreeChangeListener;
 import org.opendaylight.mdsal.binding.api.DataTreeModification;
 import org.opendaylight.mdsal.binding.api.ReadTransaction;
-import org.opendaylight.mdsal.binding.api.ReadWriteTransaction;
-import org.opendaylight.mdsal.common.api.CommitInfo;
 import org.opendaylight.mdsal.common.api.LogicalDatastoreType;
 import org.opendaylight.yang.gen.v1.urn.opendaylight.inventory.rev130819.NodeConnectorId;
-import org.opendaylight.yang.gen.v1.urn.opendaylight.inventory.rev130819.NodeConnectorRef;
 import org.opendaylight.yang.gen.v1.urn.opendaylight.inventory.rev130819.NodeId;
 import org.opendaylight.yang.gen.v1.urn.opendaylight.inventory.rev130819.Nodes;
 import org.opendaylight.yang.gen.v1.urn.opendaylight.inventory.rev130819.node.NodeConnector;
 import org.opendaylight.yang.gen.v1.urn.opendaylight.inventory.rev130819.node.NodeConnectorKey;
 import org.opendaylight.yang.gen.v1.urn.opendaylight.inventory.rev130819.nodes.Node;
 import org.opendaylight.yang.gen.v1.urn.opendaylight.inventory.rev130819.nodes.NodeKey;
-import org.opendaylight.yang.gen.v1.urn.opendaylight.l2switch.loopremover.rev140714.StpStatus;
-import org.opendaylight.yang.gen.v1.urn.opendaylight.l2switch.loopremover.rev140714.StpStatusAwareNodeConnector;
-import org.opendaylight.yang.gen.v1.urn.opendaylight.l2switch.loopremover.rev140714.StpStatusAwareNodeConnectorBuilder;
 import org.opendaylight.yang.gen.v1.urn.tbd.params.xml.ns.yang.network.topology.rev131021.NetworkTopology;
 import org.opendaylight.yang.gen.v1.urn.tbd.params.xml.ns.yang.network.topology.rev131021.TopologyId;
 import org.opendaylight.yang.gen.v1.urn.tbd.params.xml.ns.yang.network.topology.rev131021.network.topology.Topology;
@@ -177,21 +168,6 @@ public class TopologyLinkDataChangeHandler implements DataTreeChangeListener<Lin
             return;
         }
         networkGraphService.addLinks(links);
-        final ReadWriteTransaction readWriteTransaction = dataBroker.newReadWriteTransaction();
-        updateNodeConnectorStatus(readWriteTransaction);
-        Futures.addCallback(readWriteTransaction.commit(), new FutureCallback<CommitInfo>() {
-            @Override
-            public void onSuccess(final CommitInfo result) {
-                LOG.debug("TopologyLinkDataChangeHandler write successful for tx :{}",
-                    readWriteTransaction.getIdentifier());
-            }
-
-            @Override
-            public void onFailure(final Throwable throwable) {
-                LOG.error("TopologyLinkDataChangeHandler write transaction {} failed",
-                    readWriteTransaction.getIdentifier(), throwable.getCause());
-            }
-        }, MoreExecutors.directExecutor());
         LOG.debug("Done with network graph refresh thread.");
     }
 
@@ -227,91 +203,6 @@ public class TopologyLinkDataChangeHandler implements DataTreeChangeListener<Lin
             }
         }
         return internalLinks;
-    }
-
-    private void updateNodeConnectorStatus(final ReadWriteTransaction readWriteTransaction) {
-        List<Link> allLinks = networkGraphService.getAllLinks();
-        if (allLinks == null || allLinks.isEmpty()) {
-            return;
-        }
-
-        List<Link> mstLinks = networkGraphService.getLinksInMst();
-        for (Link link : allLinks) {
-            if (mstLinks != null && !mstLinks.isEmpty() && mstLinks.contains(link)) {
-                updateNodeConnector(readWriteTransaction, getSourceNodeConnectorRef(link), StpStatus.Forwarding);
-                updateNodeConnector(readWriteTransaction, getDestNodeConnectorRef(link), StpStatus.Forwarding);
-            } else {
-                updateNodeConnector(readWriteTransaction, getSourceNodeConnectorRef(link), StpStatus.Discarding);
-                updateNodeConnector(readWriteTransaction, getDestNodeConnectorRef(link), StpStatus.Discarding);
-            }
-        }
-    }
-
-    private static NodeConnectorRef getSourceNodeConnectorRef(final Link link) {
-        final var source = link.getSource();
-        return new NodeConnectorRef(createNodeConnectorIdentifier(source.getSourceNode().getValue(),
-            source.getSourceTp().getValue()));
-    }
-
-    private static NodeConnectorRef getDestNodeConnectorRef(final Link link) {
-        final var dest = link.getDestination();
-        return new NodeConnectorRef(createNodeConnectorIdentifier(dest.getDestNode().getValue(),
-            dest.getDestTp().getValue()));
-    }
-
-    private static void updateNodeConnector(final ReadWriteTransaction readWriteTransaction,
-            final NodeConnectorRef nodeConnectorRef, final StpStatus stpStatus) {
-        StpStatusAwareNodeConnectorBuilder stpStatusAwareNodeConnectorBuilder =
-            new StpStatusAwareNodeConnectorBuilder().setStatus(stpStatus);
-        checkIfExistAndUpdateNodeConnector(readWriteTransaction, nodeConnectorRef,
-            stpStatusAwareNodeConnectorBuilder.build());
-    }
-
-    private static void checkIfExistAndUpdateNodeConnector(final ReadWriteTransaction readWriteTransaction,
-        final NodeConnectorRef nodeConnectorRef,
-        final StpStatusAwareNodeConnector stpStatusAwareNodeConnector) {
-        final Optional<NodeConnector> dataObjectOptional;
-        try {
-            dataObjectOptional = readWriteTransaction.read(LogicalDatastoreType.OPERATIONAL,
-                (DataObjectIdentifier<NodeConnector>) nodeConnectorRef.getValue()).get();
-        } catch (InterruptedException | ExecutionException e) {
-            LOG.error("Error reading node connector {}", nodeConnectorRef.getValue());
-            readWriteTransaction.commit();
-            throw new RuntimeException("Error reading from operational store, node connector : " + nodeConnectorRef,
-                e);
-        }
-
-        if (dataObjectOptional.isEmpty()) {
-            LOG.error("Unable to update Stp Status node connector {} note present in  operational store",
-                nodeConnectorRef.getValue());
-            return;
-        }
-
-        final NodeConnector nc = dataObjectOptional.orElseThrow();
-        if (sameStatusPresent(nc.augmentation(StpStatusAwareNodeConnector.class),
-            stpStatusAwareNodeConnector.getStatus())) {
-            return;
-        }
-
-        // build instance id for StpStatusAwareNodeConnector
-        final var stpStatusAwareNcInstanceId = ((DataObjectIdentifier<NodeConnector>) nodeConnectorRef.getValue())
-            .toBuilder()
-            .augmentation(StpStatusAwareNodeConnector.class)
-            .build();
-        // update StpStatusAwareNodeConnector in operational store
-        readWriteTransaction.merge(LogicalDatastoreType.OPERATIONAL, stpStatusAwareNcInstanceId,
-            stpStatusAwareNodeConnector);
-        LOG.debug("Merged Stp Status aware node connector in operational {} with status {}",
-            stpStatusAwareNcInstanceId, stpStatusAwareNodeConnector);
-    }
-
-    private static boolean sameStatusPresent(final StpStatusAwareNodeConnector stpStatusAwareNodeConnector,
-            final StpStatus stpStatus) {
-        if (stpStatusAwareNodeConnector == null) {
-            return false;
-        }
-        final var status = stpStatusAwareNodeConnector.getStatus();
-        return status != null && status.getIntValue() == stpStatus.getIntValue();
     }
 
     @VisibleForTesting
