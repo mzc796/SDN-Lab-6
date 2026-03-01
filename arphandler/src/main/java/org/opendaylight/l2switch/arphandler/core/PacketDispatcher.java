@@ -12,17 +12,44 @@ import static java.util.Objects.requireNonNull;
 import com.google.common.util.concurrent.FutureCallback;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.MoreExecutors;
+import java.util.AbstractMap;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedList;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Queue;
+import java.util.Set;
+import java.util.concurrent.ExecutionException;
+import org.opendaylight.l2switch.arphandler.flow.ArpFlowWriter;
 import org.opendaylight.l2switch.arphandler.inventory.InventoryReader;
+import org.opendaylight.mdsal.binding.api.DataBroker;
+import org.opendaylight.mdsal.binding.api.ReadTransaction;
+import org.opendaylight.mdsal.common.api.LogicalDatastoreType;
 import org.opendaylight.yang.gen.v1.urn.ietf.params.xml.ns.yang.ietf.yang.types.rev130715.MacAddress;
+import org.opendaylight.yang.gen.v1.urn.opendaylight.address.tracker.rev140617.address.node.connector.Addresses;
+import org.opendaylight.yang.gen.v1.urn.opendaylight.host.tracker.rev140624.HostNode;
+import org.opendaylight.yang.gen.v1.urn.opendaylight.host.tracker.rev140624.host.AttachmentPoints;
 import org.opendaylight.yang.gen.v1.urn.opendaylight.inventory.rev130819.NodeConnectorId;
 import org.opendaylight.yang.gen.v1.urn.opendaylight.inventory.rev130819.NodeConnectorRef;
+import org.opendaylight.yang.gen.v1.urn.opendaylight.inventory.rev130819.NodeId;
 import org.opendaylight.yang.gen.v1.urn.opendaylight.inventory.rev130819.NodeRef;
+import org.opendaylight.yang.gen.v1.urn.opendaylight.inventory.rev130819.Nodes;
 import org.opendaylight.yang.gen.v1.urn.opendaylight.inventory.rev130819.node.NodeConnector;
+import org.opendaylight.yang.gen.v1.urn.opendaylight.inventory.rev130819.node.NodeConnectorKey;
 import org.opendaylight.yang.gen.v1.urn.opendaylight.inventory.rev130819.nodes.Node;
+import org.opendaylight.yang.gen.v1.urn.opendaylight.inventory.rev130819.nodes.NodeKey;
 import org.opendaylight.yang.gen.v1.urn.opendaylight.packet.service.rev130709.TransmitPacket;
 import org.opendaylight.yang.gen.v1.urn.opendaylight.packet.service.rev130709.TransmitPacketInput;
 import org.opendaylight.yang.gen.v1.urn.opendaylight.packet.service.rev130709.TransmitPacketInputBuilder;
+import org.opendaylight.yang.gen.v1.urn.tbd.params.xml.ns.yang.network.topology.rev131021.NetworkTopology;
+import org.opendaylight.yang.gen.v1.urn.tbd.params.xml.ns.yang.network.topology.rev131021.TopologyId;
+import org.opendaylight.yang.gen.v1.urn.tbd.params.xml.ns.yang.network.topology.rev131021.network.topology.Topology;
+import org.opendaylight.yang.gen.v1.urn.tbd.params.xml.ns.yang.network.topology.rev131021.network.topology.TopologyKey;
+import org.opendaylight.yang.gen.v1.urn.tbd.params.xml.ns.yang.network.topology.rev131021.network.topology.topology.Link;
 import org.opendaylight.yangtools.binding.BindingInstanceIdentifier;
 import org.opendaylight.yangtools.binding.DataObjectIdentifier;
 import org.opendaylight.yangtools.binding.PropertyIdentifier;
@@ -32,64 +59,306 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * PacketDispatcher sends packets out to the network.
+ * PacketDispatcher handles ARP packets by installing flow entries on switches.
+ * <ul>
+ *   <li>Unknown destination: installs a flood flow on the ingress switch (broadcast only),
+ *       then floods the packet.</li>
+ *   <li>Known destination: computes the shortest BFS path through the topology, installs forwarding
+ *       flows on each hop switch, then sends the packet out on the first egress port.</li>
+ * </ul>
+ * Host locations are resolved via the HostTracker topology (NetworkTopology/Topology[flow:1]/Node[host:MAC]),
+ * which already filters out switch-to-switch (transit) ports.
  */
 public class PacketDispatcher {
     private static final Logger LOG = LoggerFactory.getLogger(PacketDispatcher.class);
+    private static final String DEFAULT_TOPOLOGY_ID = "flow:1";
 
     private final InventoryReader inventoryReader;
     private final TransmitPacket transmitPacket;
+    private final ArpFlowWriter arpFlowWriter;
+    private final DataBroker dataBroker;
 
-    public PacketDispatcher(InventoryReader inventoryReader, TransmitPacket transmitPacket) {
+    public PacketDispatcher(InventoryReader inventoryReader, TransmitPacket transmitPacket,
+            ArpFlowWriter arpFlowWriter, DataBroker dataBroker) {
         this.inventoryReader = requireNonNull(inventoryReader);
         this.transmitPacket = requireNonNull(transmitPacket);
+        this.arpFlowWriter = requireNonNull(arpFlowWriter);
+        this.dataBroker = requireNonNull(dataBroker);
     }
 
     /**
-     * Dispatches the packet in the appropriate way - flood or unicast.
+     * Dispatches an ARP packet: installs flow entries for flood (unknown dst) or
+     * shortest-path forwarding (known dst), and sends the current packet out.
      *
-     * @param payload
-     *            The payload to be sent.
-     * @param ingress
-     *            The NodeConnector where the payload came from.
-     * @param srcMac
-     *            The source MacAddress of the packet.
-     * @param destMac
-     *            The destination MacAddress of the packet.
+     * @param payload  raw Ethernet frame bytes
+     * @param ingress  NodeConnector where the packet was received
+     * @param srcMac   Ethernet source MAC
+     * @param destMac  Ethernet destination MAC
      */
     public void dispatchPacket(byte[] payload, NodeConnectorRef ingress, MacAddress srcMac, MacAddress destMac) {
         inventoryReader.readInventory();
 
-        final var nodePath = getNodePath(ingress.getValue());
-        String nodeId = nodePath.firstKeyOf(Node.class).getId().getValue();
-        NodeConnectorRef srcConnectorRef = inventoryReader.getControllerSwitchConnectors().get(nodeId);
+        final var ingressNodePath = getNodePath(ingress.getValue());
+        String ingressNodeId = ingressNodePath.firstKeyOf(Node.class).getId().getValue();
+        NodeConnectorRef ingressControllerRef = inventoryReader.getControllerSwitchConnectors().get(ingressNodeId);
 
-        if (srcConnectorRef == null) {
+        if (ingressControllerRef == null) {
             refreshInventoryReader();
-            srcConnectorRef = inventoryReader.getControllerSwitchConnectors().get(nodeId);
+            ingressControllerRef = inventoryReader.getControllerSwitchConnectors().get(ingressNodeId);
         }
-        NodeConnectorRef destNodeConnector = inventoryReader.getNodeConnector(nodePath, destMac);
-        if (srcConnectorRef != null) {
-            if (destNodeConnector != null) {
-                sendPacketOut(payload, srcConnectorRef, destNodeConnector);
-            } else {
-                floodPacket(nodeId, payload, ingress, srcConnectorRef);
+
+        // Look up destination MAC via HostTracker topology (already transit-port filtered).
+        // For broadcast/null destMac, findHostByMac returns null and we fall through to flood.
+        NodeConnectorRef destNodeConnector = findHostByMac(destMac);
+
+        if (destNodeConnector != null) {
+            // Known dst: install routing flows along shortest path, then packet-out
+            handleKnownDst(payload, ingress, ingressNodeId, destNodeConnector, destMac);
+        } else if (ingressControllerRef != null) {
+            // Unknown or broadcast destination: flood the packet.
+            // Install a flood flow only for broadcast ARP requests (ff:ff:ff:ff:ff:ff) so
+            // future broadcast ARPs are handled without packet-in. For unicast MACs that are
+            // not yet in HostTracker, skip the flow to avoid conflicts with the forward flow
+            // that will be installed once HostTracker learns the host location.
+            if (isBroadcastMac(destMac)) {
+                arpFlowWriter.installFloodFlow(new NodeId(ingressNodeId), destMac);
             }
+            floodPacket(ingressNodeId, payload, ingress, ingressControllerRef);
         } else {
-            LOG.info("Cannot send packet out or flood as controller node connector is not available for node {}.",
-                    nodeId);
+            LOG.info("Cannot dispatch ARP: controller connector unavailable for node {}.", ingressNodeId);
         }
     }
 
     /**
-     * Floods the packet.
+     * Looks up the host attachment point by Ethernet destination MAC using the HostTracker topology.
+     * Returns {@code null} if destMac is null, broadcast, or not yet known to HostTracker.
      *
-     * @param nodeId
-     *            The node id
-     * @param payload
-     *            The payload to be sent.
-     * @param origIngress
-     *            The NodeConnector where the payload came from.
+     * <p>HostTracker's {@code isNodeConnectorInternal()} is supposed to filter transit ports, but
+     * it is timing-dependent: if LLDP topology links are not yet built when HostTracker first sees
+     * a MAC (e.g. via a flooded ARP), it may record a transit port as an attachment point.
+     * To guard against this, we rebuild the transit-port set ourselves from the switch-to-switch
+     * links in the same topology snapshot and skip any attachment point that appears in it.
+     */
+    NodeConnectorRef findHostByMac(final MacAddress destMac) {
+        if (destMac == null) {
+            return null;
+        }
+        final Topology topo;
+        try (ReadTransaction tx = dataBroker.newReadOnlyTransaction()) {
+            var topoIid = DataObjectIdentifier.builder(NetworkTopology.class)
+                .child(Topology.class, new TopologyKey(new TopologyId(DEFAULT_TOPOLOGY_ID)))
+                .build();
+            topo = tx.read(LogicalDatastoreType.OPERATIONAL, topoIid).get().orElse(null);
+        } catch (InterruptedException | ExecutionException e) {
+            LOG.error("Failed to read topology for host MAC lookup", e);
+            return null;
+        }
+        if (topo == null) {
+            return null;
+        }
+
+        // Build set of transit TpIds from switch-to-switch links in the same topology snapshot.
+        // This mirrors what HostTracker's isNodeConnectorInternal() does, but without the timing
+        // dependency: both the links and the host nodes come from the same single read.
+        var transitTps = new HashSet<String>();
+        long switchCount = 0;
+        for (var topoNode : topo.nonnullNode().values()) {
+            if (!topoNode.getNodeId().getValue().startsWith("host:")) {
+                switchCount++;
+            }
+        }
+        for (Link link : topo.nonnullLink().values()) {
+            String srcNode = link.getSource().getSourceNode().getValue();
+            String dstNode = link.getDestination().getDestNode().getValue();
+            if (!srcNode.startsWith("host:") && !dstNode.startsWith("host:")) {
+                transitTps.add(link.getSource().getSourceTp().getValue());
+                transitTps.add(link.getDestination().getDestTp().getValue());
+            }
+        }
+
+        // In a multi-switch topology, if no LLDP links are present yet we cannot distinguish
+        // transit ports from host-facing ports. HostTracker's isNodeConnectorInternal() has the
+        // same blind spot: it also relies on these links. Without them, it may have recorded a
+        // transit port (e.g. s2-eth1) as h1's attachment point, leading to wrong forwarding flows.
+        // Return null to force safe flood delivery; forwarding flows will be installed correctly
+        // once LLDP topology is established.
+        if (switchCount > 1 && transitTps.isEmpty()) {
+            LOG.debug("findHostByMac: LLDP topology not ready yet, forcing flood for MAC {}",
+                destMac.getValue());
+            return null;
+        }
+
+        for (var topoNode : topo.nonnullNode().values()) {
+            if (!topoNode.getNodeId().getValue().startsWith("host:")) {
+                continue;
+            }
+            HostNode hostNode = topoNode.augmentation(HostNode.class);
+            if (hostNode == null) {
+                continue;
+            }
+
+            // Check whether this host has the target MAC address (case-insensitive for safety)
+            boolean hasMac = false;
+            for (Addresses addr : hostNode.nonnullAddresses().values()) {
+                if (addr.getMac() != null
+                        && destMac.getValue().equalsIgnoreCase(addr.getMac().getValue())) {
+                    hasMac = true;
+                    break;
+                }
+            }
+            if (!hasMac) {
+                continue;
+            }
+
+            // Return the first active attachment point that is NOT a transit port
+            for (AttachmentPoints ap : hostNode.nonnullAttachmentPoints().values()) {
+                if (Boolean.TRUE.equals(ap.getActive())) {
+                    String tpIdVal = ap.getTpId().getValue();
+                    if (!transitTps.contains(tpIdVal)) {
+                        int lastColon = tpIdVal.lastIndexOf(':');
+                        String switchId = tpIdVal.substring(0, lastColon);
+                        return buildNodeConnectorRef(switchId, tpIdVal);
+                    }
+                    LOG.debug("findHostByMac: skipping transit attachment {} for MAC {}",
+                        tpIdVal, destMac.getValue());
+                }
+            }
+        }
+        return null;
+    }
+
+    private static boolean isBroadcastMac(final MacAddress mac) {
+        return mac == null || "ff:ff:ff:ff:ff:ff".equalsIgnoreCase(mac.getValue());
+    }
+
+    /**
+     * Installs ARP forwarding flows along the shortest path to the destination host,
+     * then sends the current ARP packet on the first egress port.
+     */
+    private void handleKnownDst(byte[] payload, NodeConnectorRef ingress, String ingressNodeIdStr,
+            NodeConnectorRef destConnector, MacAddress destMac) {
+        String dstNodeIdStr = getNodePath(destConnector.getValue()).firstKeyOf(Node.class).getId().getValue();
+        String hostPortUri = getNodeConnectorId(destConnector).getValue();
+
+        if (ingressNodeIdStr.equals(dstNodeIdStr)) {
+            // Same switch: install one flow directly to the host port
+            arpFlowWriter.installForwardFlow(new NodeId(dstNodeIdStr), destMac, hostPortUri);
+            sendPacketOut(payload, ingress, destConnector);
+            return;
+        }
+
+        // Multi-hop: BFS through the topology to build the forwarding path
+        List<Map.Entry<String, String>> hops = computeArpPath(ingressNodeIdStr, dstNodeIdStr);
+
+        // Install a forwarding flow on each intermediate hop switch
+        for (var hop : hops) {
+            arpFlowWriter.installForwardFlow(new NodeId(hop.getKey()), destMac, hop.getValue());
+        }
+        // Install a forwarding flow on the destination switch toward the host port
+        arpFlowWriter.installForwardFlow(new NodeId(dstNodeIdStr), destMac, hostPortUri);
+
+        // Send the current packet out on the first hop's egress port
+        if (!hops.isEmpty()) {
+            String firstEgressUri = hops.get(0).getValue();
+            sendPacketOut(payload, ingress, buildNodeConnectorRef(ingressNodeIdStr, firstEgressUri));
+        }
+    }
+
+    /**
+     * BFS through the network topology to find the shortest path from srcNodeId to dstNodeId.
+     *
+     * @return ordered list of (switchNodeId, egressPortUri) entries, one per hop switch,
+     *         not including the final destination switch's host port entry
+     */
+    private List<Map.Entry<String, String>> computeArpPath(String srcNodeId, String dstNodeId) {
+        List<Link> links = readTopologyLinks();
+        if (links.isEmpty()) {
+            LOG.warn("No topology links for ARP path {} -> {}", srcNodeId, dstNodeId);
+            return Collections.emptyList();
+        }
+
+        // Build undirected adjacency: nodeId -> list of (neighborNodeId, egressTpId on this side)
+        Map<String, List<Map.Entry<String, String>>> adj = new HashMap<>();
+        for (Link link : links) {
+            String src = link.getSource().getSourceNode().getValue();
+            String srcTp = link.getSource().getSourceTp().getValue();
+            String dst = link.getDestination().getDestNode().getValue();
+            String dstTp = link.getDestination().getDestTp().getValue();
+            adj.computeIfAbsent(src, k -> new ArrayList<>())
+                .add(new AbstractMap.SimpleImmutableEntry<>(dst, srcTp));
+            adj.computeIfAbsent(dst, k -> new ArrayList<>())
+                .add(new AbstractMap.SimpleImmutableEntry<>(src, dstTp));
+        }
+
+        // BFS: prevNode[n] = the node we came from; prevTp[n] = egress TP on prevNode side
+        Map<String, String> prevNode = new HashMap<>();
+        Map<String, String> prevTp = new HashMap<>();
+        Set<String> visited = new HashSet<>();
+        Queue<String> queue = new LinkedList<>();
+        visited.add(srcNodeId);
+        queue.add(srcNodeId);
+
+        outer:
+        while (!queue.isEmpty()) {
+            String curr = queue.poll();
+            for (var neighbor : adj.getOrDefault(curr, Collections.emptyList())) {
+                String next = neighbor.getKey();
+                if (!visited.contains(next)) {
+                    visited.add(next);
+                    prevNode.put(next, curr);
+                    prevTp.put(next, neighbor.getValue());
+                    if (next.equals(dstNodeId)) {
+                        break outer;
+                    }
+                    queue.add(next);
+                }
+            }
+        }
+
+        if (!prevNode.containsKey(dstNodeId)) {
+            LOG.warn("No path found from {} to {} in topology", srcNodeId, dstNodeId);
+            return Collections.emptyList();
+        }
+
+        // Reconstruct path in forward order: [(srcNode, egressTp), ..., (penultimateNode, egressTp)]
+        List<Map.Entry<String, String>> hops = new ArrayList<>();
+        String cur = dstNodeId;
+        while (prevNode.containsKey(cur)) {
+            String prev = prevNode.get(cur);
+            hops.add(0, new AbstractMap.SimpleImmutableEntry<>(prev, prevTp.get(cur)));
+            cur = prev;
+        }
+        return hops;
+    }
+
+    /**
+     * Reads switch-to-switch links from the flow:1 topology in the operational datastore.
+     * Host attachment links (containing "host" in their ID) are excluded.
+     */
+    private List<Link> readTopologyLinks() {
+        var topoIid = DataObjectIdentifier.builder(NetworkTopology.class)
+            .child(Topology.class, new TopologyKey(new TopologyId(DEFAULT_TOPOLOGY_ID)))
+            .build();
+        try (ReadTransaction tx = dataBroker.newReadOnlyTransaction()) {
+            Optional<Topology> opt = tx.read(LogicalDatastoreType.OPERATIONAL, topoIid).get();
+            if (opt.isEmpty() || opt.orElseThrow().getLink() == null) {
+                return Collections.emptyList();
+            }
+            List<Link> result = new ArrayList<>();
+            for (Link link : opt.orElseThrow().getLink().values()) {
+                if (!link.getLinkId().getValue().contains("host")) {
+                    result.add(link);
+                }
+            }
+            return result;
+        } catch (InterruptedException | ExecutionException e) {
+            LOG.error("Failed to read topology links", e);
+            return Collections.emptyList();
+        }
+    }
+
+    /**
+     * Floods the packet out all ports of the given switch except the ingress port.
      */
     public void floodPacket(String nodeId, byte[] payload, NodeConnectorRef origIngress,
             NodeConnectorRef controllerNodeConnector) {
@@ -106,7 +375,6 @@ public class PacketDispatcher {
         }
         for (NodeConnectorRef ncRef : nodeConnectors) {
             final var ncId = getNodeConnectorId(ncRef);
-            // Don't flood on discarding node connectors & origIngress
             if (!ncId.equals(getNodeConnectorId(origIngress))) {
                 sendPacketOut(payload, origIngress, ncRef);
             }
@@ -122,14 +390,11 @@ public class PacketDispatcher {
     }
 
     /**
-     * Sends the specified packet on the specified port.
+     * Sends the specified packet out on the specified egress port.
      *
-     * @param payload
-     *            The payload to be sent.
-     * @param ingress
-     *            The NodeConnector where the payload came from.
-     * @param egress
-     *            The NodeConnector where the payload will go.
+     * @param payload the raw packet bytes
+     * @param ingress the original ingress NodeConnector
+     * @param egress  the egress NodeConnector to send on
      */
     public void sendPacketOut(byte[] payload, NodeConnectorRef ingress, NodeConnectorRef egress) {
         if (ingress == null || egress == null) {
@@ -154,6 +419,13 @@ public class PacketDispatcher {
                 LOG.debug("transmitPacket for {} failed", input, failure);
             }
         }, MoreExecutors.directExecutor());
+    }
+
+    private static NodeConnectorRef buildNodeConnectorRef(String nodeIdStr, String ncIdStr) {
+        return new NodeConnectorRef(DataObjectIdentifier.builder(Nodes.class)
+            .child(Node.class, new NodeKey(new NodeId(nodeIdStr)))
+            .child(NodeConnector.class, new NodeConnectorKey(new NodeConnectorId(ncIdStr)))
+            .build());
     }
 
     private void refreshInventoryReader() {

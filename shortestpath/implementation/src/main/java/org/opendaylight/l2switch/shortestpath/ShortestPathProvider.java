@@ -61,7 +61,8 @@ public class ShortestPathProvider {
         // Build packet handler
         ShortestPathPacketHandler handler = new ShortestPathPacketHandler(
             dataBroker, graphManager, flowWriter,
-            rpcService.getRpc(TransmitPacket.class));
+            rpcService.getRpc(TransmitPacket.class),
+            config.getTopologyId());
 
         // Register for IPv4 packets
         ipv4ListenerReg = notificationService.registerListener(Ipv4PacketReceived.class, handler);

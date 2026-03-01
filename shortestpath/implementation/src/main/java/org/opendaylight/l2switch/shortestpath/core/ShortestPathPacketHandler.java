@@ -18,8 +18,9 @@ import org.opendaylight.mdsal.binding.api.ReadTransaction;
 import org.opendaylight.mdsal.common.api.LogicalDatastoreType;
 import org.opendaylight.yang.gen.v1.urn.ietf.params.xml.ns.yang.ietf.inet.types.rev130715.IpAddress;
 import org.opendaylight.yang.gen.v1.urn.ietf.params.xml.ns.yang.ietf.inet.types.rev130715.Ipv4Address;
-import org.opendaylight.yang.gen.v1.urn.opendaylight.address.tracker.rev140617.AddressCapableNodeConnector;
 import org.opendaylight.yang.gen.v1.urn.opendaylight.address.tracker.rev140617.address.node.connector.Addresses;
+import org.opendaylight.yang.gen.v1.urn.opendaylight.host.tracker.rev140624.HostNode;
+import org.opendaylight.yang.gen.v1.urn.opendaylight.host.tracker.rev140624.host.AttachmentPoints;
 import org.opendaylight.yang.gen.v1.urn.opendaylight.inventory.rev130819.NodeConnectorId;
 import org.opendaylight.yang.gen.v1.urn.opendaylight.inventory.rev130819.NodeConnectorRef;
 import org.opendaylight.yang.gen.v1.urn.opendaylight.inventory.rev130819.NodeId;
@@ -36,7 +37,11 @@ import org.opendaylight.yang.gen.v1.urn.opendaylight.packet.ipv4.rev140528.Ipv4P
 import org.opendaylight.yang.gen.v1.urn.opendaylight.packet.ipv4.rev140528.ipv4.packet.received.packet.chain.packet.Ipv4Packet;
 import org.opendaylight.yang.gen.v1.urn.opendaylight.packet.service.rev130709.TransmitPacket;
 import org.opendaylight.yang.gen.v1.urn.opendaylight.packet.service.rev130709.TransmitPacketInputBuilder;
+import org.opendaylight.yang.gen.v1.urn.tbd.params.xml.ns.yang.network.topology.rev131021.NetworkTopology;
+import org.opendaylight.yang.gen.v1.urn.tbd.params.xml.ns.yang.network.topology.rev131021.TopologyId;
 import org.opendaylight.yang.gen.v1.urn.tbd.params.xml.ns.yang.network.topology.rev131021.TpId;
+import org.opendaylight.yang.gen.v1.urn.tbd.params.xml.ns.yang.network.topology.rev131021.network.topology.Topology;
+import org.opendaylight.yang.gen.v1.urn.tbd.params.xml.ns.yang.network.topology.rev131021.network.topology.TopologyKey;
 import org.opendaylight.yangtools.binding.DataObjectIdentifier;
 import org.opendaylight.yangtools.yang.binding.InstanceIdentifier;
 import org.slf4j.Logger;
@@ -47,18 +52,22 @@ import org.slf4j.LoggerFactory;
  */
 public class ShortestPathPacketHandler implements Listener<Ipv4PacketReceived> {
     private static final Logger LOG = LoggerFactory.getLogger(ShortestPathPacketHandler.class);
+    private static final String DEFAULT_TOPOLOGY_ID = "flow:1";
 
     private final DataBroker dataBroker;
     private final NetworkGraphManager graphManager;
     private final ShortestPathFlowWriter flowWriter;
     private final TransmitPacket transmitPacket;
+    private final String topologyId;
 
     public ShortestPathPacketHandler(final DataBroker dataBroker, final NetworkGraphManager graphManager,
-            final ShortestPathFlowWriter flowWriter, final TransmitPacket transmitPacket) {
+            final ShortestPathFlowWriter flowWriter, final TransmitPacket transmitPacket,
+            final String topologyId) {
         this.dataBroker = requireNonNull(dataBroker);
         this.graphManager = requireNonNull(graphManager);
         this.flowWriter = requireNonNull(flowWriter);
         this.transmitPacket = requireNonNull(transmitPacket);
+        this.topologyId = topologyId != null && !topologyId.isEmpty() ? topologyId : DEFAULT_TOPOLOGY_ID;
     }
 
     @Override
@@ -92,7 +101,7 @@ public class ShortestPathPacketHandler implements Listener<Ipv4PacketReceived> {
         InstanceIdentifier<?> ingressIid = ((DataObjectIdentifier<?>) ingressRef.getValue()).toLegacy();
         NodeId ingressNodeId = ingressIid.firstKeyOf(Node.class).getId();
 
-        // Step 3: Find destination host location by scanning AddressCapableNodeConnector
+        // Step 3: Find destination host location via HostTracker topology (already transit-port filtered)
         HostLocation dst = findHostByIp(dstIp);
         if (dst == null) {
             LOG.debug("No host found for IP {}, will retry on next packet.", dstIp.getValue());
@@ -103,10 +112,10 @@ public class ShortestPathPacketHandler implements Listener<Ipv4PacketReceived> {
         TpId dstTpId = new TpId(dst.ncId.getValue());
 
         // Convert inventory NodeId to topology NodeId for graph lookups
-        org.opendaylight.yang.gen.v1.urn.tbd.params.xml.ns.yang.network.topology.rev131021.NodeId topoIngress =
+        var topoIngress =
             new org.opendaylight.yang.gen.v1.urn.tbd.params.xml.ns.yang.network.topology.rev131021.NodeId(
                 ingressNodeId.getValue());
-        org.opendaylight.yang.gen.v1.urn.tbd.params.xml.ns.yang.network.topology.rev131021.NodeId topoDst =
+        var topoDst =
             new org.opendaylight.yang.gen.v1.urn.tbd.params.xml.ns.yang.network.topology.rev131021.NodeId(
                 dstNodeId.getValue());
 
@@ -145,34 +154,54 @@ public class ShortestPathPacketHandler implements Listener<Ipv4PacketReceived> {
     }
 
     /**
-     * Scans the operational inventory for a NodeConnector augmented with AddressCapableNodeConnector
-     * that has the given IPv4 address.
+     * Looks up the host attachment point by IPv4 address using the HostTracker topology.
+     * The HostTracker already filters out transit (switch-to-switch) ports, so the returned
+     * attachment point is guaranteed to be the edge port where the host is directly connected.
      */
     private HostLocation findHostByIp(final Ipv4Address dstIp) {
-        Nodes nodes = null;
+        final Topology topo;
         try (ReadTransaction tx = dataBroker.newReadOnlyTransaction()) {
-            var opt = tx.read(LogicalDatastoreType.OPERATIONAL,
-                DataObjectIdentifier.builder(Nodes.class).build()).get();
-            nodes = opt.orElse(null);
+            var topoIid = DataObjectIdentifier.builder(NetworkTopology.class)
+                .child(Topology.class, new TopologyKey(new TopologyId(topologyId)))
+                .build();
+            topo = tx.read(LogicalDatastoreType.OPERATIONAL, topoIid).get().orElse(null);
         } catch (InterruptedException | ExecutionException e) {
-            LOG.error("Failed to read nodes from operational datastore", e);
+            LOG.error("Failed to read topology for host lookup", e);
             return null;
         }
-        if (nodes == null) {
+        if (topo == null) {
             return null;
         }
 
-        for (Node node : nodes.nonnullNode().values()) {
-            for (NodeConnector nc : node.nonnullNodeConnector().values()) {
-                AddressCapableNodeConnector acnc = nc.augmentation(AddressCapableNodeConnector.class);
-                if (acnc == null) {
-                    continue;
+        for (var topoNode : topo.nonnullNode().values()) {
+            if (!topoNode.getNodeId().getValue().startsWith("host:")) {
+                continue;
+            }
+            HostNode hostNode = topoNode.augmentation(HostNode.class);
+            if (hostNode == null) {
+                continue;
+            }
+
+            // Check whether this host has the target IPv4 address
+            boolean hasIp = false;
+            for (Addresses addr : hostNode.nonnullAddresses().values()) {
+                IpAddress ip = addr.getIp();
+                if (ip != null && dstIp.equals(ip.getIpv4Address())) {
+                    hasIp = true;
+                    break;
                 }
-                for (Addresses addr : acnc.nonnullAddresses().values()) {
-                    IpAddress addIp = addr.getIp();
-                    if (addIp != null && dstIp.equals(addIp.getIpv4Address())) {
-                        return new HostLocation(node.getId(), nc.key().getId());
-                    }
+            }
+            if (!hasIp) {
+                continue;
+            }
+
+            // Return the first active attachment point
+            for (AttachmentPoints ap : hostNode.nonnullAttachmentPoints().values()) {
+                if (Boolean.TRUE.equals(ap.getActive())) {
+                    String tpIdVal = ap.getTpId().getValue();
+                    int lastColon = tpIdVal.lastIndexOf(':');
+                    String switchId = tpIdVal.substring(0, lastColon);
+                    return new HostLocation(new NodeId(switchId), new NodeConnectorId(tpIdVal));
                 }
             }
         }

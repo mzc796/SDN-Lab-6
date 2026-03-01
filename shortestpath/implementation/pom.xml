@@ -40,6 +40,10 @@
         </dependency>
         <dependency>
             <groupId>org.opendaylight.l2switch</groupId>
+            <artifactId>hosttracker-model</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.opendaylight.l2switch</groupId>
             <artifactId>packethandler-model</artifactId>
         </dependency>
         <dependency>
