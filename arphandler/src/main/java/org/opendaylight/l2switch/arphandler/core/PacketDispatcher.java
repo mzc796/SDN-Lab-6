@@ -24,7 +24,6 @@ import java.util.Optional;
 import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.ExecutionException;
-import org.opendaylight.l2switch.arphandler.flow.ArpFlowWriter;
 import org.opendaylight.l2switch.arphandler.inventory.InventoryReader;
 import org.opendaylight.mdsal.binding.api.DataBroker;
 import org.opendaylight.mdsal.binding.api.ReadTransaction;
@@ -59,15 +58,16 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * PacketDispatcher handles ARP packets by installing flow entries on switches.
+ * PacketDispatcher handles ARP packets via packet-out (no flow installation).
  * <ul>
- *   <li>Unknown destination: installs a flood flow on the ingress switch (broadcast only),
- *       then floods the packet.</li>
- *   <li>Known destination: computes the shortest BFS path through the topology, installs forwarding
- *       flows on each hop switch, then sends the packet out on the first egress port.</li>
+ *   <li>Unknown or broadcast destination: floods the packet out all ports of the ingress switch.</li>
+ *   <li>Known destination: BFS-computes the shortest path and packet-outs from the ingress switch
+ *       to the first hop; subsequent switches re-send to the controller (ARP→CONTROLLER flow)
+ *       for hop-by-hop delivery.</li>
  * </ul>
- * Host locations are resolved via the HostTracker topology (NetworkTopology/Topology[flow:1]/Node[host:MAC]),
- * which already filters out switch-to-switch (transit) ports.
+ * Not installing ARP forward flows ensures the controller always sees every ARP packet,
+ * so HostTracker stays accurate and ShortestPath can always find every host's location.
+ * Host locations are resolved via the HostTracker topology (NetworkTopology/Topology[flow:1]/Node[host:MAC]).
  */
 public class PacketDispatcher {
     private static final Logger LOG = LoggerFactory.getLogger(PacketDispatcher.class);
@@ -75,20 +75,18 @@ public class PacketDispatcher {
 
     private final InventoryReader inventoryReader;
     private final TransmitPacket transmitPacket;
-    private final ArpFlowWriter arpFlowWriter;
     private final DataBroker dataBroker;
 
     public PacketDispatcher(InventoryReader inventoryReader, TransmitPacket transmitPacket,
-            ArpFlowWriter arpFlowWriter, DataBroker dataBroker) {
+            DataBroker dataBroker) {
         this.inventoryReader = requireNonNull(inventoryReader);
         this.transmitPacket = requireNonNull(transmitPacket);
-        this.arpFlowWriter = requireNonNull(arpFlowWriter);
         this.dataBroker = requireNonNull(dataBroker);
     }
 
     /**
-     * Dispatches an ARP packet: installs flow entries for flood (unknown dst) or
-     * shortest-path forwarding (known dst), and sends the current packet out.
+     * Dispatches an ARP packet via packet-out: floods for unknown/broadcast destination,
+     * or forwards toward the known destination host.
      *
      * @param payload  raw Ethernet frame bytes
      * @param ingress  NodeConnector where the packet was received
@@ -112,17 +110,12 @@ public class PacketDispatcher {
         NodeConnectorRef destNodeConnector = findHostByMac(destMac);
 
         if (destNodeConnector != null) {
-            // Known dst: install routing flows along shortest path, then packet-out
-            handleKnownDst(payload, ingress, ingressNodeId, destNodeConnector, destMac);
+            // Known dst: forward via packet-out along shortest path
+            handleKnownDst(payload, ingress, ingressNodeId, destNodeConnector);
         } else if (ingressControllerRef != null) {
-            // Unknown or broadcast destination: flood the packet.
-            // Install a flood flow only for broadcast ARP requests (ff:ff:ff:ff:ff:ff) so
-            // future broadcast ARPs are handled without packet-in. For unicast MACs that are
-            // not yet in HostTracker, skip the flow to avoid conflicts with the forward flow
-            // that will be installed once HostTracker learns the host location.
-            if (isBroadcastMac(destMac)) {
-                arpFlowWriter.installFloodFlow(new NodeId(ingressNodeId), destMac);
-            }
+            // Unknown or broadcast destination: flood via packet-out.
+            // No flow is installed so the controller always sees ARP traffic and can keep
+            // HostTracker accurate for every host that sends or receives ARP.
             floodPacket(ingressNodeId, payload, ingress, ingressControllerRef);
         } else {
             LOG.info("Cannot dispatch ARP: controller connector unavailable for node {}.", ingressNodeId);
@@ -227,37 +220,25 @@ public class PacketDispatcher {
         return null;
     }
 
-    private static boolean isBroadcastMac(final MacAddress mac) {
-        return mac == null || "ff:ff:ff:ff:ff:ff".equalsIgnoreCase(mac.getValue());
-    }
-
     /**
-     * Installs ARP forwarding flows along the shortest path to the destination host,
-     * then sends the current ARP packet on the first egress port.
+     * Forwards an ARP packet toward the known destination host via packet-out.
+     * No flow entries are installed so the controller continues to see all ARP
+     * traffic, keeping HostTracker accurate for every host.
      */
     private void handleKnownDst(byte[] payload, NodeConnectorRef ingress, String ingressNodeIdStr,
-            NodeConnectorRef destConnector, MacAddress destMac) {
+            NodeConnectorRef destConnector) {
         String dstNodeIdStr = getNodePath(destConnector.getValue()).firstKeyOf(Node.class).getId().getValue();
-        String hostPortUri = getNodeConnectorId(destConnector).getValue();
 
         if (ingressNodeIdStr.equals(dstNodeIdStr)) {
-            // Same switch: install one flow directly to the host port
-            arpFlowWriter.installForwardFlow(new NodeId(dstNodeIdStr), destMac, hostPortUri);
+            // Same switch: send directly to the host port
             sendPacketOut(payload, ingress, destConnector);
             return;
         }
 
-        // Multi-hop: BFS through the topology to build the forwarding path
+        // Multi-hop: find first egress port via BFS and packet-out from the ingress switch.
+        // The next switch will send the packet to the controller again (ARP→CONTROLLER flow),
+        // allowing hop-by-hop forwarding while always keeping HostTracker up to date.
         List<Map.Entry<String, String>> hops = computeArpPath(ingressNodeIdStr, dstNodeIdStr);
-
-        // Install a forwarding flow on each intermediate hop switch
-        for (var hop : hops) {
-            arpFlowWriter.installForwardFlow(new NodeId(hop.getKey()), destMac, hop.getValue());
-        }
-        // Install a forwarding flow on the destination switch toward the host port
-        arpFlowWriter.installForwardFlow(new NodeId(dstNodeIdStr), destMac, hostPortUri);
-
-        // Send the current packet out on the first hop's egress port
         if (!hops.isEmpty()) {
             String firstEgressUri = hops.get(0).getValue();
             sendPacketOut(payload, ingress, buildNodeConnectorRef(ingressNodeIdStr, firstEgressUri));

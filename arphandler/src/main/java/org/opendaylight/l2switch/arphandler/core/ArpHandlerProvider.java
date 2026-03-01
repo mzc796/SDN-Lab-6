@@ -7,7 +7,6 @@
  */
 package org.opendaylight.l2switch.arphandler.core;
 
-import org.opendaylight.l2switch.arphandler.flow.ArpFlowWriter;
 import org.opendaylight.l2switch.arphandler.flow.InitialFlowWriter;
 import org.opendaylight.l2switch.arphandler.inventory.InventoryReader;
 import org.opendaylight.mdsal.binding.api.DataBroker;
@@ -54,16 +53,9 @@ public class ArpHandlerProvider {
         InventoryReader inventoryReader = new InventoryReader(dataBroker);
         inventoryReader.setRefreshData(true);
 
-        // Setup ArpFlowWriter (uses flood-flow-* config for higher-priority ARP routing flows)
-        ArpFlowWriter arpFlowWriter = new ArpFlowWriter(rpcService.getRpc(AddFlow.class),
-            arpHandlerConfig.getFloodFlowTableId(),
-            arpHandlerConfig.getFloodFlowPriority(),
-            arpHandlerConfig.getFloodFlowIdleTimeout(),
-            arpHandlerConfig.getFloodFlowHardTimeout());
-
-        // Setup PacketDispatcher
+        // Setup PacketDispatcher (no ARP flow installation — controller always sees ARP)
         PacketDispatcher packetDispatcher = new PacketDispatcher(inventoryReader,
-            rpcService.getRpc(TransmitPacket.class), arpFlowWriter, dataBroker);
+            rpcService.getRpc(TransmitPacket.class), dataBroker);
 
         // Setup ArpPacketHandler
         ArpPacketHandler arpPacketHandler = new ArpPacketHandler(packetDispatcher);

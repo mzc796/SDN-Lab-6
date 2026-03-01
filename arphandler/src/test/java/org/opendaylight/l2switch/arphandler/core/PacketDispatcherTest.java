@@ -22,7 +22,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.opendaylight.l2switch.arphandler.flow.ArpFlowWriter;
 import org.opendaylight.l2switch.arphandler.inventory.InventoryReader;
 import org.opendaylight.mdsal.binding.api.DataBroker;
 import org.opendaylight.yang.gen.v1.urn.ietf.params.xml.ns.yang.ietf.yang.types.rev130715.MacAddress;
@@ -47,15 +46,13 @@ class PacketDispatcherTest {
     @Mock
     private HashMap<String, List<NodeConnectorRef>> switchNodeConnectors;
     @Mock
-    private ArpFlowWriter arpFlowWriter;
-    @Mock
     private DataBroker dataBroker;
 
     private PacketDispatcher packetDispatcher;
 
     @BeforeEach
     void beforeEach() {
-        packetDispatcher = spy(new PacketDispatcher(inventoryReader, transmitPacket, arpFlowWriter, dataBroker));
+        packetDispatcher = spy(new PacketDispatcher(inventoryReader, transmitPacket, dataBroker));
     }
 
     @Test
