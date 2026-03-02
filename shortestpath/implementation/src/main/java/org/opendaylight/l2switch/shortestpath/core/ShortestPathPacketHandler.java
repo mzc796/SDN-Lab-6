@@ -146,11 +146,6 @@ public class ShortestPathPacketHandler implements Listener<Ipv4PacketReceived> {
         }
         // Install a flow on the destination switch directing traffic to the host port
         flowWriter.installFlow(dstNodeId, dstIp, dstTpId);
-
-        // Forward the first packet out via the first hop's egress port
-        TpId firstEgressTp = hops.get(0).getValue();
-        sendPacket(notification.getPayload(), ingressRef,
-            buildNodeConnectorRef(ingressNodeId, firstEgressTp));
     }
 
     /**
@@ -208,6 +203,7 @@ public class ShortestPathPacketHandler implements Listener<Ipv4PacketReceived> {
         return null;
     }
 
+    @SuppressWarnings("unused")
     private void sendPacket(final byte[] payload, final NodeConnectorRef ingress,
             final NodeConnectorRef egress) {
         InstanceIdentifier<Node> nodeIID = ((DataObjectIdentifier<?>) egress.getValue())
@@ -220,7 +216,8 @@ public class ShortestPathPacketHandler implements Listener<Ipv4PacketReceived> {
             .build());
     }
 
-    private static NodeConnectorRef buildNodeConnectorRef(final NodeId nodeId, final TpId tpId) {
+    @SuppressWarnings("unused")
+    static NodeConnectorRef buildNodeConnectorRef(final NodeId nodeId, final TpId tpId) {
         return new NodeConnectorRef(DataObjectIdentifier.builder(Nodes.class)
             .child(Node.class, new NodeKey(nodeId))
             .child(NodeConnector.class, new NodeConnectorKey(new NodeConnectorId(tpId.getValue())))

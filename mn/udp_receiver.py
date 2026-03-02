@@ -1,6 +1,23 @@
 from scapy.all import sniff, conf, hexdump
+import sys
 
-IFACE = "h2-eth0"
+
+
+# Usage:
+#   python3 udp_receiver.py <host_num> [port]
+# Example:
+#   python3 udp_receiver.py 2
+#   python3 udp_receiver.py 3 4321
+
+if len(sys.argv) < 2:
+    print("Usage: python3 udp_receiver.py <host_num>")
+    sys.exit(1)
+
+host_n = int(sys.argv[1])
+
+my_ip = f"10.0.0.{host_n}"
+
+IFACE = f"h{host_n}-eth0"
 
 def handle(pkt):
     print("=== got packet ===")
