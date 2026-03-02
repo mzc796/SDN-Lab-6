@@ -1,5 +1,22 @@
 # SDN-Lab-6
 Build IP-based shortest path routing based on L2swtich project.
+## Learning Objectives
+
+In this lab, you will:
+
+* Understand how reactive forwarding works in Software-Defined Networking (SDN).
+
+* Observe how packets trigger Packet-In → Flow Installation → Packet-Out behavior.
+
+* Analyze the differences and commonalities among ICMP, TCP, and UDP packets.
+
+* Inspect OpenFlow flow table changes during traffic forwarding.
+
+* Debug a control-plane bug and explain its impact.
+
+* Trace the complete lifecycle of a packet from host to controller and back.
+
+This lab builds an IP-based shortest path routing application on top of the L2Switch project in OpenDaylight.
 
 ## Virtual Machine Summary
 Memory: >= 8GB
@@ -70,7 +87,7 @@ Installation Disc: [ubuntu-22.04.4-desktop-amd64.iso](https://old-releases.ubunt
    ```
 7. Test IP-based shortest path routing. 
 
-   Question: ICMP, TCP, UDP, which types of packets can be forwarded automatically? 
+   Question: ICMP, TCP, UDP, which types of packets can be forwarded automatically by IP-based shortest path routing? 
 
    (1) Test ICMP
 
@@ -115,6 +132,9 @@ Installation Disc: [ubuntu-22.04.4-desktop-amd64.iso](https://old-releases.ubunt
 8. Find the bug
 
    There is a bug in the code. Please send UDP packets from different hosts to find the bug and correct it.
+   
+   After fixing the bug, manually delete the folder "SDN-Lab-6/distribution/karaf/target/", repeat Steps 2 to 5 to verify the fix.
+   
    Hint: You could test `h1` sends UDP packets to `h2`, and `h3` sends UDP packets to `h2`.
    
 10. Write down the workflow of UDP/TCP/ICMP packets from hosts to the switch, controller, ..., until they arrive at the destination host. 
