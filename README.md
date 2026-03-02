@@ -1,5 +1,10 @@
 # SDN-Lab-6
-Build IP-based shortest path routing based on L2swtich project.
+This project extends the OpenDaylight L2Switch project
+(https://github.com/opendaylight/l2switch)
+to implement IP-based shortest path routing for educational purposes.
+
+The original OpenDaylight project is licensed under the Eclipse Public License (EPL).
+All original license headers and copyright notices are preserved.
 ## Learning Objectives
 
 In this lab, you will:
