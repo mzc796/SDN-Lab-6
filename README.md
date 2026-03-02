@@ -146,5 +146,5 @@ Installation Disc: [ubuntu-22.04.4-desktop-amd64.iso](https://old-releases.ubunt
    
    Hint: You could test `h1` sends UDP packets to `h2`, and `h3` sends UDP packets to `h2`.
    
-10. Write down the workflow of UDP/TCP/ICMP packets from hosts to the switch, controller, ..., until they arrive at the destination host. 
+10. Write down the workflow of UDP/TCP/ICMP packets from hosts to the switch, controller, ..., until they arrive at the destination host. For example, the complete process of `h1 ping h2`.
     
