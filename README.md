@@ -36,6 +36,10 @@ Installation Disc: [ubuntu-22.04.4-desktop-amd64.iso](https://old-releases.ubunt
 
 [L2switch User Guide](https://test-odl-docs.readthedocs.io/en/latest/user-guide/l2switch-user-guide.html)
 ## Preparation
+0. (Optional) Install IntelliJ-idea
+   ```
+   sudo snap install intellij-idea --classic
+   ```
 1. Download the code:
    ```
    git clone https://github.com/mzc796/SDN-Lab-6.git
@@ -85,7 +89,7 @@ Installation Disc: [ubuntu-22.04.4-desktop-amd64.iso](https://old-releases.ubunt
    cd SDN-Lab-6/mn/
    sudo ./dump_flows.sh s3
    ```
-7. Test IP-based shortest path routing. 
+6. Test IP-based shortest path routing. 
 
    Question: ICMP, TCP, UDP, which types of packets can be forwarded automatically by IP-based shortest path routing? 
 
@@ -129,7 +133,7 @@ Installation Disc: [ubuntu-22.04.4-desktop-amd64.iso](https://old-releases.ubunt
    ```
    sudo ./dump_flows s3
    ```
-8. Find the bug
+7. Find the bug
 
    There is a bug in the code. Please send UDP packets from different hosts to find the bug and correct it.
    
