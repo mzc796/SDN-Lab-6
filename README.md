@@ -115,6 +115,7 @@ Installation Disc: [ubuntu-22.04.4-desktop-amd64.iso](https://old-releases.ubunt
 8. Find the bug
 
    There is a bug in the code. Please send UDP packets from different hosts to find the bug and correct it.
+   Hint: You could test `h1` sends UDP packets to `h2`, and `h3` sends UDP packets to `h2`.
    
-9. Write down the workflow of UDP/TCP/ICMP packets from hosts to the switch, controller, ..., until they arrive at the destination host. 
+10. Write down the workflow of UDP/TCP/ICMP packets from hosts to the switch, controller, ..., until they arrive at the destination host. 
     
