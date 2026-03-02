@@ -57,18 +57,18 @@ Installation Disc: [ubuntu-22.04.4-desktop-amd64.iso](https://old-releases.ubunt
    ```
 5. Check connection.
 
-   (1) Observe default flow entries. For example:
-   ```
-   cd SDN-Lab-6/mn/
-   sudo ./dump_flows.sh s3
-   ```
-   (2) Observe topology.
+   (1) Observe topology.
    ```
    cd SDN-Lab-6/odl-scripts/
    mkdir data
    sudo ./req_topo.sh
    ```
-6. Test IP-based shortest path routing. 
+   (2) Observe default flow entries. For example:
+   ```
+   cd SDN-Lab-6/mn/
+   sudo ./dump_flows.sh s3
+   ```
+7. Test IP-based shortest path routing. 
 
    Question: ICMP, TCP, UDP, which types of packets can be forwarded automatically? 
 
@@ -106,7 +106,7 @@ Installation Disc: [ubuntu-22.04.4-desktop-amd64.iso](https://old-releases.ubunt
    ```
    python3 udp_sender.py 1 2
    ```
-   (4) Check flow entries and explain what's observed.
+   (4) Check flow entries and explain what's observed and why.
    
    In the system terminal:
    ```
