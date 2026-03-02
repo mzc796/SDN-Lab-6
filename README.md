@@ -71,18 +71,23 @@ Installation Disc: [ubuntu-22.04.4-desktop-amd64.iso](https://old-releases.ubunt
 6. Test IP-based shortest path routing. 
 
    Question: ICMP, TCP, UDP, which types of packets can be forwarded automatically? 
-   (1) Test ICMP
 
-   In the mininet terminal:
-   ```
-   h1 ping h2
-   ```
-   (2) Test TCP
+   (1) Test ICMP
 
    In the mininet terminal:
    ```
    xterm h1 h2
    ```
+   In the h1 terminal:
+   ```
+   ping 10.0.0.2
+   ```
+   In the h2 terminal:
+   ```
+   ping 10.0.0.1
+   ```
+   (2) Test TCP
+
    In the h2 terminal:
    ```
    python3 tcp_server.py
@@ -107,9 +112,9 @@ Installation Disc: [ubuntu-22.04.4-desktop-amd64.iso](https://old-releases.ubunt
    ```
    sudo ./dump_flows s3
    ```
-7. Find the bug
+8. Find the bug
 
    There is a bug in the code. Please send UDP packets from different hosts to find the bug and correct it.
    
-8. Write down the workflow of UDP/TCP/ICMP packets from hosts to the switch, controller, ..., until they arrive at the destination host. 
+9. Write down the workflow of UDP/TCP/ICMP packets from hosts to the switch, controller, ..., until they arrive at the destination host. 
     
